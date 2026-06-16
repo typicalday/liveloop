@@ -1,5 +1,8 @@
 # oweflow
 
+[![CI](https://github.com/typicalday/oweflow/actions/workflows/ci.yml/badge.svg)](https://github.com/typicalday/oweflow/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 A generic **dataflow workflow engine**. Steps don't have a status — they have
 *debts*. A step becomes eligible to run purely because of the state of the
 artifacts it consumes and produces, never because something flipped it to
@@ -339,3 +342,9 @@ oweflow is a faithful, decoupled implementation of an internal dataflow-engine
 spec. [`docs/design.md`](docs/design.md) is a self-contained distillation —
 the lifecycle, firing rule, forward cascade, the two reject kinds, §6 liveness,
 and the concurrency model — cross-referenced from the source as `§N`.
+
+---
+
+## License
+
+[Apache License 2.0](LICENSE) © Typical Day.

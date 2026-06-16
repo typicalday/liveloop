@@ -2,6 +2,7 @@
   "name": "oweflow",
   "version": "0.1.0",
   "description": "A generic dataflow workflow engine — steps that owe and consume artifacts, advanced by debt and reason-carrying invalidation. Direct better-sqlite3 (WAL + commit-fingerprint CAS).",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "oweflow": "bin/oweflow.mjs"
