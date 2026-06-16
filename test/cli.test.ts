@@ -222,6 +222,104 @@ test('list tolerates a workflow whose definition is no longer available (done: n
   assert.equal(list[0].done, null, 'done is null when the def is missing, not a crash');
 });
 
+// ---- status --all (the fleet read) ------------------------------------------
+
+test('status --all returns one full status entry per instance, with identity + task key', () => {
+  const { run } = makeCli();
+  assert.deepEqual(run('status', '--all').json(), [], 'empty fleet is an empty array');
+
+  const a = run('create', 'delivery', '--title', 'A', '--provide', `proposal=${J({ text: 'x' })}`, '--param', 'task=t_aaa').json().workflow;
+  const b = run('create', 'research', '--title', 'B', '--provide', `question=${J({})}`).json().workflow;
+
+  const all = run('status', '--all').json();
+  assert.equal(all.length, 2);
+  const byWf: Record<string, any> = Object.fromEntries(all.map((e: any) => [e.workflow, e]));
+
+  // identity + join key + the full derived status, all in one call
+  const ea = byWf[a];
+  assert.equal(ea.def, 'delivery');
+  assert.equal(ea.title, 'A');
+  assert.equal(ea.task, 't_aaa', 'the --param task is surfaced as the join key');
+  assert.equal(typeof ea.done, 'boolean');
+  assert.ok(Array.isArray(ea.debts) && Array.isArray(ea.eligible) && Array.isArray(ea.blocked));
+
+  // an instance created without --param task reports a null join key
+  assert.equal(byWf[b].task, null);
+  assert.equal(byWf[b].def, 'research');
+});
+
+test('status --all isolates an instance whose definition is missing (error field, no crash)', () => {
+  const { run, db, home } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+
+  // re-open against a defs dir without 'delivery' — status can't be derived
+  const noDefs = mkdtempSync(join(tmpdir(), 'oweflow-nodefs-'));
+  const out: string[] = [];
+  const code = main(['status', '--all'], { cwd: home, env: { OWEFLOW_DB: db, OWEFLOW_DEFS: noDefs }, out: (s) => out.push(s), err: () => {} });
+  const all = JSON.parse(out.join('\n'));
+  assert.equal(code, 0, 'the fleet read still succeeds');
+  assert.equal(all.length, 1);
+  assert.equal(all[0].workflow, wf, 'identity is still reported from the stored row');
+  assert.match(all[0].error, /unknown workflow definition/, 'status failure degrades to an error field');
+  assert.equal(all[0].done, undefined, 'no derived status when the def is missing');
+});
+
+test('status --all surfaces a producer crash loop (consecutive failedRuns) per debt', () => {
+  const { run } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+
+  // the planner claims and closes `failed` three times without greening — a
+  // crash loop that §6 never stalls (judgmentRejects stays 0)
+  for (let i = 0; i < 3; i++) {
+    const order = run('tick', wf).json().orders.find((o: any) => o.loop === 'planner');
+    assert.ok(order, `planner order on attempt ${i + 1}`);
+    run('close', wf, order.run, '--outcome', 'failed');
+  }
+
+  const entry = run('status', '--all').json().find((e: any) => e.workflow === wf);
+  const plan = entry.debts.find((d: any) => d.path === 'plan');
+  assert.equal(plan.failedRuns, 3, 'the bulk fleet read carries the crash-loop streak');
+  assert.equal(plan.stalled, false, 'a crash loop is not a §6 judgment stall');
+  // a clean close clears it on the next read
+  const order = run('tick', wf).json().orders.find((o: any) => o.loop === 'planner');
+  run('green', wf, order.run, 'plan', '--value', J({ plan: 'v1' }));
+  run('close', wf, order.run);
+  const after = run('status', '--all').json().find((e: any) => e.workflow === wf);
+  assert.equal(after.debts.find((d: any) => d.path === 'plan'), undefined, 'plan is green — no longer a debt');
+});
+
+test('status --all rejects a trailing workflow positional (one or all is ambiguous)', () => {
+  const { run } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+  const r = run('status', '--all', wf);
+  assert.equal(r.code, 1, 'contradictory args exit 1');
+  assert.match(r.err, /takes no workflow argument/);
+});
+
+test('status --all reports a finished instance as done with no debts', () => {
+  const { run } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+
+  // drive the whole pipeline to its terminal merge
+  const step = (loop: string, path: string, terminal = false) => {
+    const order = run('tick', wf).json().orders.find((o: any) => o.loop === loop);
+    assert.ok(order, `${loop} order`);
+    const args = ['green', wf, order.run, path, '--value', J({ ok: true })];
+    if (terminal) args.push('--terminal');
+    run(...args);
+    run('close', wf, order.run);
+  };
+  step('planner', 'plan');
+  step('builder', 'pr');
+  step('reviewer', 'verdict');
+  step('merger', 'merge', true);
+
+  const entry = run('status', '--all').json().find((e: any) => e.workflow === wf);
+  assert.equal(entry.done, true, 'the finished instance reads done in the fleet');
+  assert.deepEqual(entry.debts, [], 'a done instance owes nothing');
+  assert.deepEqual(entry.eligible, [], 'and has no eligible steps');
+});
+
 // ---- store/path defaulting --------------------------------------------------
 
 test('with no --db or OWEFLOW_DB, the store defaults under cwd/.oweflow', () => {

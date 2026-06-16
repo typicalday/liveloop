@@ -599,7 +599,22 @@ export class Engine {
 
   status(workflow: string): WorkflowStatus {
     const def = this.defFor(workflow);
-    return workflowStatus(def, this.artMap(workflow));
+    const arts = this.artMap(workflow);
+    const st = workflowStatus(def, arts);
+    // Enrich each debt with its producer's crash-loop signal (the run log; the
+    // pure layer has no store). A map-loop producer fires once per element, its
+    // run keyed by the consumed element path (e.g. "gather.source[0]"); a
+    // plain/reduce producer fires with key "". Recover that firing key from the
+    // debt's path so the streak is counted per element, not collapsed to "".
+    for (const d of st.debts) {
+      const a = arts.get(d.path);
+      if (!a) continue;
+      const el = parseElement(a.path);
+      const key = el ? elementPath(el.stem, el.index) : '';
+      const fr = this.store.recentFailedRuns(workflow, a.producer, key);
+      if (fr > 0) d.failedRuns = fr;
+    }
+    return st;
   }
 
   // ---- internals -------------------------------------------------------------

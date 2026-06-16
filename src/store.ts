@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS run (
   updated_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS run_wf_loop ON run (workflow, loop, created_at);
+-- recentFailedRuns filters by key too; this index lets it walk the trailing
+-- runs of one loop+key in order without scanning the whole loop's history.
+CREATE INDEX IF NOT EXISTS run_wf_loop_key ON run (workflow, loop, key, created_at);
 
 CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
@@ -508,6 +511,28 @@ export class Store {
       .prepare('SELECT * FROM run WHERE workflow = ? AND loop = ? ORDER BY created_at DESC LIMIT 1')
       .get(workflow, loop) as RunRowRaw | undefined;
     return r ? mapRun(r) : undefined;
+  }
+
+  /**
+   * Count of consecutive trailing `failed` runs for this loop+key — the
+   * crash-loop signal. Any closed run that is NOT `failed` (ok/no_work/skipped)
+   * breaks the streak; still-open runs (outcome NULL) are ignored.
+   */
+  recentFailedRuns(workflow: string, loop: string, key: string = ''): number {
+    const rows = this.db
+      .prepare(
+        // rowid DESC is the tiebreaker: two runs closed in the same millisecond
+        // (or a clock that didn't advance) must still order by insertion, or a
+        // trailing failed→ok pair could read in the wrong order and miscount.
+        'SELECT outcome FROM run WHERE workflow = ? AND loop = ? AND key = ? AND outcome IS NOT NULL ORDER BY created_at DESC, rowid DESC',
+      )
+      .all(workflow, loop, key) as Array<{ outcome: string }>;
+    let n = 0;
+    for (const r of rows) {
+      if (r.outcome === 'failed') n++;
+      else break;
+    }
+    return n;
   }
 }
 

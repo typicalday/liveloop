@@ -12,6 +12,7 @@
  *   oweflow provide <wf> <name> [--value json]   supply an owed input
  *   oweflow tick <wf> [--now ms]       pull eligible orders
  *   oweflow status <wf>                derive debts / eligible / blocked
+ *   oweflow status --all               every instance's status in one call (fleet read)
  *   oweflow show <wf>                  dump raw artifacts (debugging)
  *   oweflow list                       list instances
  *   oweflow green <wf> <run> <path> [--value json] [--terminal]
@@ -31,7 +32,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Engine } from './engine.ts';
 import { openStore } from './store.ts';
-import type { Store } from './store.ts';
+import type { Store, WorkflowRow } from './store.ts';
 import { DefError, loadDefs } from './defs.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -184,6 +185,7 @@ Commands:
   provide <wf> <name> [--value json]     supply an owed (seedOwed) input
   tick <wf> [--now <ms>]                 pull eligible orders
   status <wf>                            derive debts / eligible / blocked
+  status --all                           every instance's status in one call (fleet read)
   show <wf>                              dump raw artifacts
   list                                   list workflow instances
   green <wf> <run> <path> [--value json] [--terminal]
@@ -248,6 +250,25 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         return;
       }
       case 'status': {
+        // `--all` is the fleet read: one call returns every instance's full
+        // status plus its identity and `task` join key, so a supervisor (dev)
+        // sees the whole project in a single invocation instead of N ticks. A
+        // single instance whose def is unresolvable degrades to an `error`
+        // field rather than aborting the sweep.
+        if (flag(args, 'all')) {
+          // `--all` is the whole-fleet read; a workflow argument is
+          // contradictory (one or all?). Reject it in both orderings rather
+          // than silently ignoring the caller's intent:
+          //   `status wf --all`  → the wf lands in positionals[1]
+          //   `status --all wf`  → the parser binds wf as `--all`'s value
+          const v = last(args, 'all');
+          const stray = args.positionals[1] ?? (v !== 'true' && v !== '' ? v : undefined);
+          if (stray !== undefined) {
+            throw new CliError(`status --all takes no workflow argument (got "${stray}")`);
+          }
+          print(io, store.listWorkflows().map((w) => statusEntry(engine, w)));
+          return;
+        }
         print(io, engine.status(need(args, 1, 'workflow')));
         return;
       }
@@ -339,6 +360,23 @@ function safeStatus(engine: Engine, wf: string): boolean | null {
     return engine.status(wf).done;
   } catch {
     return null;
+  }
+}
+
+/** One row of the `status --all` fleet read: instance identity + join key,
+ *  merged with its derived status (or an `error` if the def can't resolve). */
+function statusEntry(engine: Engine, w: WorkflowRow): Record<string, unknown> {
+  const base = {
+    workflow: w.id,
+    def: w.def,
+    title: w.title ?? null,
+    task: w.params?.task ?? null,
+    createdAt: w.createdAt,
+  };
+  try {
+    return { ...base, ...engine.status(w.id) };
+  } catch (e) {
+    return { ...base, error: (e as Error).message };
   }
 }
 
