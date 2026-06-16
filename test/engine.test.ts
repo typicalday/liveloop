@@ -230,6 +230,46 @@ test('recentFailedRuns: only the consecutive trailing failures count', () => {
   assert.equal(store.recentFailedRuns(wf, 'planner'), 0);
 });
 
+test('crash-loop on a map element: failedRuns is keyed by the element path, not ""', () => {
+  // A map producer fires once per element, its run keyed by the consumed
+  // element path (model.ts: `key: m.path`). status() must recover that firing
+  // key from the debt path — otherwise it queries the run log with key "" and
+  // reports failedRuns=0 for every map element. (B1 regression guard.)
+  const { engine, store } = makeEngine([research]);
+  const wf = engine.createInstance('research', { provide: { question: { q: 'why' } } });
+
+  // gather emits two sources then seals → the formatcheck map has one firing per
+  // element, each keyed by its element path.
+  const gather = fire(engine, wf, 'gather', 1000);
+  engine.emit(wf, gather.run, [{ value: { s: 'a' } }, { value: { s: 'b' } }]);
+  engine.seal(wf, gather.run, { count: 2 });
+  engine.close(wf, gather.run);
+
+  // Crash the source[0] firing twice. Each crash leaves its formatcheck owed, so
+  // the next tick re-fires it; close every *other* order ok so only source[0]
+  // keeps a trailing-failed streak in the run log.
+  let now = 2000;
+  for (let i = 1; i <= 2; i++) {
+    const t = engine.tick(wf, { now: now++ });
+    const fc0 = t.orders.find((o) => o.loop === 'formatcheck' && o.key === 'gather.source[0]');
+    assert.ok(fc0, `formatcheck[0] order on crash ${i}`);
+    for (const o of t.orders) if (o.run !== fc0.run) complete(engine, wf, o, { ok: true });
+    engine.close(wf, fc0.run, 'failed');
+    // the run log keys this streak under the element path, never ""
+    assert.equal(store.recentFailedRuns(wf, 'formatcheck', 'gather.source[0]'), i);
+    assert.equal(store.recentFailedRuns(wf, 'formatcheck', ''), 0);
+  }
+
+  const s = engine.status(wf);
+  const d0 = s.debts.find((d) => d.path === 'gather.source[0].formatcheck');
+  assert.ok(d0, 'the owed source[0].formatcheck is a debt');
+  assert.equal(d0.failedRuns, 2, 'failedRuns counted per element via the recovered firing key');
+  assert.equal(d0.stalled, false, 'a crash loop is not a §6 judgment stall');
+  // a sibling element that never crashed carries no streak
+  const d1 = s.debts.find((d) => d.path === 'gather.source[1].formatcheck');
+  assert.equal(d1, undefined, 'source[1] greened — not a debt, no failedRuns');
+});
+
 // ---- forward cascade through the engine -------------------------------------
 
 test('forward cascade: re-deciding plan structurally re-rejects the green pr', () => {

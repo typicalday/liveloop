@@ -288,6 +288,38 @@ test('status --all surfaces a producer crash loop (consecutive failedRuns) per d
   assert.equal(after.debts.find((d: any) => d.path === 'plan'), undefined, 'plan is green — no longer a debt');
 });
 
+test('status --all rejects a trailing workflow positional (one or all is ambiguous)', () => {
+  const { run } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+  const r = run('status', '--all', wf);
+  assert.equal(r.code, 1, 'contradictory args exit 1');
+  assert.match(r.err, /takes no workflow argument/);
+});
+
+test('status --all reports a finished instance as done with no debts', () => {
+  const { run } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+
+  // drive the whole pipeline to its terminal merge
+  const step = (loop: string, path: string, terminal = false) => {
+    const order = run('tick', wf).json().orders.find((o: any) => o.loop === loop);
+    assert.ok(order, `${loop} order`);
+    const args = ['green', wf, order.run, path, '--value', J({ ok: true })];
+    if (terminal) args.push('--terminal');
+    run(...args);
+    run('close', wf, order.run);
+  };
+  step('planner', 'plan');
+  step('builder', 'pr');
+  step('reviewer', 'verdict');
+  step('merger', 'merge', true);
+
+  const entry = run('status', '--all').json().find((e: any) => e.workflow === wf);
+  assert.equal(entry.done, true, 'the finished instance reads done in the fleet');
+  assert.deepEqual(entry.debts, [], 'a done instance owes nothing');
+  assert.deepEqual(entry.eligible, [], 'and has no eligible steps');
+});
+
 // ---- store/path defaulting --------------------------------------------------
 
 test('with no --db or OWEFLOW_DB, the store defaults under cwd/.oweflow', () => {

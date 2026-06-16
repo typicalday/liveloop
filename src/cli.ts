@@ -256,6 +256,16 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         // single instance whose def is unresolvable degrades to an `error`
         // field rather than aborting the sweep.
         if (flag(args, 'all')) {
+          // `--all` is the whole-fleet read; a workflow argument is
+          // contradictory (one or all?). Reject it in both orderings rather
+          // than silently ignoring the caller's intent:
+          //   `status wf --all`  → the wf lands in positionals[1]
+          //   `status --all wf`  → the parser binds wf as `--all`'s value
+          const v = last(args, 'all');
+          const stray = args.positionals[1] ?? (v !== 'true' && v !== '' ? v : undefined);
+          if (stray !== undefined) {
+            throw new CliError(`status --all takes no workflow argument (got "${stray}")`);
+          }
           print(io, store.listWorkflows().map((w) => statusEntry(engine, w)));
           return;
         }
