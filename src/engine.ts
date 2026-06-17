@@ -207,7 +207,7 @@ export class Engine {
       return id;
     });
     this.fire({ type: 'instance', workflow: id, def: defName });
-    this.fire(this.settledEvent(id));
+    this.fireSettled(id);
     return id;
   }
 
@@ -236,7 +236,7 @@ export class Engine {
       this.settle(workflow, def);
     });
     this.fire({ type: 'commit', workflow, path: name, action: 'provide' });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
   }
 
   // ---- the tick (maintain → reap → eligible → cadence/budget → claim) --------
@@ -428,7 +428,7 @@ export class Engine {
       return { path, outcome: 'green' };
     });
     this.fire({ type: 'commit', workflow, run, path: result.path, action: 'green', outcome: result.outcome });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
     return result;
   }
 
@@ -508,7 +508,7 @@ export class Engine {
       return { outcome: 'emitted', created };
     });
     this.fire({ type: 'commit', workflow, run, path: stem, action: 'emit', outcome: result.outcome });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
     return result;
   }
 
@@ -543,7 +543,7 @@ export class Engine {
       return { path: sealP, outcome: 'green' };
     });
     this.fire({ type: 'commit', workflow, run, path: result.path, action: 'seal', outcome: result.outcome });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
     return result;
   }
 
@@ -565,7 +565,7 @@ export class Engine {
       this.settle(workflow, def);
     });
     this.fire({ type: 'commit', workflow, path, action: 'reject' });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
   }
 
   /** Retract a collection member (§11.3): drop it, terminally; abandon the index. */
@@ -584,7 +584,7 @@ export class Engine {
       this.settle(workflow, def);
     });
     this.fire({ type: 'commit', workflow, path, action: 'retract' });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
   }
 
   /** A producer skips its own owed output on a dead branch (§16.1 routing). */
@@ -609,7 +609,7 @@ export class Engine {
       this.settle(workflow, def);
     });
     this.fire({ type: 'commit', workflow, path, action: 'skip' });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
   }
 
   /**
@@ -634,7 +634,7 @@ export class Engine {
       this.settle(workflow, def);
     });
     this.fire({ type: 'commit', workflow, path, action: 'retry' });
-    this.fire(this.settledEvent(workflow));
+    this.fireSettled(workflow);
   }
 
   // ---- run lifecycle ---------------------------------------------------------
@@ -723,16 +723,19 @@ export class Engine {
   }
 
   /**
-   * Derive the post-commit `settled` event from a pure read of current state —
-   * `done` plus the eligible loop names, the no-poll signal a host watches to
-   * decide whether to re-`tick`. Called only after a verb's tx has committed
-   * (and thus already settled), so the read reflects the maintained fixpoint.
+   * Emit the post-commit `settled` event — `done` plus the eligible loop names,
+   * the no-poll signal a host watches to decide whether to re-`tick`. Guarded on
+   * having a listener: deriving it runs a full `workflowStatus` artifact scan, so
+   * a subscriber-free engine (the CLI and every non-observing caller) must pay
+   * nothing — the hook stays strictly additive. Called only after a verb's tx has
+   * committed (and thus already settled), so the read reflects the fixpoint.
    */
-  private settledEvent(workflow: string): EngineEvent {
+  private fireSettled(workflow: string): void {
+    if (this.listeners.size === 0) return;
     const def = this.defFor(workflow);
     const arts = this.artMap(workflow);
     const st = workflowStatus(def, arts);
-    return { type: 'settled', workflow, done: st.done, eligible: st.eligible.map((e) => e.loop) };
+    this.fire({ type: 'settled', workflow, done: st.done, eligible: st.eligible.map((e) => e.loop) });
   }
 
   /** Materialize owed outputs + run the cascade to a fixpoint (inside a tx). */
