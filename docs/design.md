@@ -356,3 +356,47 @@ Every loop today is implicitly `on: [inputsGreen]` — fire when consumed inputs
 - **§21.11 `setAlarm` / `clearAlarm`** — engine-level API. `engine.setAlarm(workflow, loop, at: number)` and `engine.clearAlarm(workflow, loop)` are thin wrappers over `store.setAlarm` / `store.clearAlarm`. The store methods upsert the task row if it does not yet exist (evaluator loop may not have been ticked yet). `store.getAlarm(workflow, loop)` returns the current `alarm_at` or `undefined`.
 - **§21.12 Heartbeat re-arm** — once an idle firing greens `outcome`, the alarm is cleared. If the evaluator body calls `setAlarm` to schedule a follow-up, the engine's `maintainDecisions` call inside `settle` detects (on the next tick) that `outcome` is green and `idleEligible` is true (the new alarm elapsed), and emits a structural `reject` re-arm on `outcome`. This arms the idle loop again without any extra state. Without a new alarm, and with `now < last_progress + idleAfterMs`, `idleEligible` returns false — no re-arm, no thrash.
 - **§21.13 Purity discipline** — `src/model.ts` is clock-free. `eligibleFirings` and `maintainDecisions` accept an optional `TimeFacts` bag `{ now, lastProgressMs, inFlight, alarms }` as their third parameter. All clock reads happen at the engine boundary (`opts.now ?? nowMs()` in `engine.ts`). `TimeFacts` is assembled by `engine.computeTimeFacts` (a private method) before calling into the model. For a fixed `(arts, TimeFacts)` pair, `eligibleFirings` and `maintainDecisions` are deterministic and idempotent. `src/model.ts` imports no timer, no `Date`, and no `nowMs` — the purity is structural, not a convention.
+
+## §22 Mode 1 compile-time workflow composition (`include:`)
+
+A pure `defs.ts` feature — zero engine change. The loader produces an expanded `WorkflowDef` with the child's loops spliced in, stems prefixed, and inputs mapped or hoisted. The engine sees one flat graph.
+
+### §22.1 Grammar
+
+```yaml
+loops:
+  - include: <defName>      # child workflow name
+    as: <prefix>            # namespace token; must match ^[a-z][a-zA-Z0-9_-]*$
+    inputs:                 # optional: map child seedOwed inputs
+      <childInputName>: <outerArtifactName>
+```
+
+### §22.2 Expand-then-validate pipeline
+
+1. `buildDef` parses include directives from the loop list into `WorkflowDef._includes`, leaving them out of `loops`.
+2. `expandIncludes(def, resolve)` splices the prefixed child loops in place of each directive (M1-EXPAND).
+3. `validateDef` runs on the expanded flat def — catching cross-boundary dangling consumes, two-producer conflicts, map/reduce shape errors, and cycles for free.
+
+### §22.3 Prefixing semantics
+
+Every child artifact and loop name is prefixed with `${as}.`:
+- Loop name: `planner` → `deliver.planner`
+- Produce stem: `plan` → `deliver.plan`
+- Consume stem: `plan` → `deliver.plan`
+- Collection stem `source[]` → `deliver.source[]` (seal and elements derived correctly from the prefixed stem)
+- `invalidates` entries prefixed
+- `effect.onInvalidate` loop-name strings prefixed (but not `'pin'`/`'escalate'`)
+
+### §22.4 Input rewiring
+
+- **Mapped** (`inputs: { childInput: outerArtifact }`): the child input is not added to the parent's inputs. Every consume referencing `${as}.${childInput}` is rewritten to `outerArtifact`. The rewrite is a plain consume to an existing outer artifact (input or produce); the existing validator checks the reference for free.
+- **Unmapped**: the child input is hoisted as `${as}.${childInput}`, preserving `seedOwed`, `producer`, and `schema`.
+
+### §22.5 Recursion and cycle guard
+
+`expandIncludes` maintains an include stack. If a def name appears already on the stack, it throws `DefError: include cycle: <a> -> <b> -> <a>`.
+
+### §22.6 Dev-tooling note (deferred)
+
+Mode 1's name-prefixing (`deliver.plan`, `deliver.merge`) affects `dev` tooling that keys on loop names (worktree wiring, dashboard rendering, fleet shape-matching). Making those prefix-aware is deferred to the dev-tooling PR. Mode 1 v1 is the right tool for **brand-new combined workflows** authored fresh; not for re-skinning an existing delivery line (use Mode 2 for that).
+

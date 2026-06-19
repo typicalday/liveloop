@@ -210,6 +210,10 @@ export interface WorkflowDef {
   description?: string;
   /** external inputs seeded as artifacts when an instance starts (e.g. "proposal") */
   inputs: InputDef[];
+  /**
+   * Fully-expanded loop list. Raw YAML may contain `include:` directives (Mode 1, §22)
+   * that are expanded at load time by `expandIncludes`; the engine always sees a flat list.
+   */
   loops: LoopDef[];
   /** Workflow-level public outputs / embedding interface (design doc §5.2).
    *  Declared stems are intentional leaves: lint-exempt from dead-end warnings.
@@ -218,6 +222,12 @@ export interface WorkflowDef {
   dir?: string; // source directory, if loaded from disk
   /** Declared safety invariants verified by `modelCheck`/`oweflow check`. */
   invariants?: InvariantDef[];
+  /**
+   * @internal Mode 1 include directives before expansion. Set by `buildDef` when a
+   * loop-list entry has an `include:` key. Consumed and removed by `expandIncludes`.
+   * Never visible to the engine; always undefined on a fully-expanded def.
+   */
+  _includes?: Array<{ pos: number; defName: string; as: string; inputs: Record<string, string> }>;
 }
 
 export interface InputDef {

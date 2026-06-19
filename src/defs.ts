@@ -60,6 +60,12 @@ interface RawLoop {
   idleAfter?: unknown;
   body?: unknown;
 }
+/** Duck-typed sniffer for a raw include directive. */
+interface RawInclude {
+  include?: unknown;
+  as?: unknown;
+  inputs?: unknown;
+}
 interface RawDef {
   name?: unknown;
   title?: unknown;
@@ -136,6 +142,59 @@ function parseProduces(v: unknown, ctx: string): ProducePattern[] {
 }
 
 export class DefError extends Error {}
+
+// ---- Mode 1 include-directive helpers (M1-GRAMMAR) ---------------------------
+
+/** Duck-check: does this raw loop-list entry look like an include directive? */
+function isIncludeDirective(v: unknown): boolean {
+  return typeof v === 'object' && v !== null && 'include' in v;
+}
+
+/** Parse and validate a raw include directive (M1-GRAMMAR pre-checks). */
+function parseIncludeDirective(
+  raw: unknown,
+  i: number,
+  parentName: string,
+): { defName: string; as: string; inputs: Record<string, string> } {
+  const obj = raw as RawInclude;
+  // include: must be a non-empty string
+  if (typeof obj.include !== 'string' || obj.include.trim() === '') {
+    throw new DefError(`loop entry [${i}] 'include:' must be a workflow name string`);
+  }
+  const defName = obj.include.trim();
+  // as: is required
+  if (obj.as === undefined) {
+    throw new DefError(`loop entry [${i}] include directive is missing 'as:'`);
+  }
+  // as: must be a string
+  if (typeof obj.as !== 'string') {
+    throw new DefError(`loop entry [${i}] include 'as:' must be a string`);
+  }
+  const as = obj.as;
+  // as: must be a valid identifier token
+  if (!/^[a-z][a-zA-Z0-9_-]*$/.test(as)) {
+    throw new DefError(
+      `include 'as:' value '${as}' must be a non-empty identifier matching ^[a-z][a-zA-Z0-9_-]*$`,
+    );
+  }
+  // inputs: is optional; if present must be an object mapping strings to strings
+  const inputs: Record<string, string> = {};
+  if (obj.inputs !== undefined) {
+    if (typeof obj.inputs !== 'object' || obj.inputs === null || Array.isArray(obj.inputs)) {
+      throw new DefError(
+        `include '${as}' inputs: must be an object mapping child input names to outer artifact names`,
+      );
+    }
+    for (const [k, v] of Object.entries(obj.inputs as Record<string, unknown>)) {
+      if (typeof v !== 'string') {
+        throw new DefError(`include '${as}' inputs: value for key '${k}' must be a string`);
+      }
+      inputs[k] = v;
+    }
+  }
+  void parentName; // used by callers for cross-checks after collecting all directives
+  return { defName, as, inputs };
+}
 
 // ---- invariant helpers -------------------------------------------------------
 
@@ -252,9 +311,40 @@ export function buildDef(raw: unknown, source?: string): WorkflowDef {
   if (!Array.isArray(r.loops) || r.loops.length === 0) {
     throw new DefError(`workflow '${name}' must declare at least one loop`);
   }
-  const loops: LoopDef[] = r.loops.map((rl, i) => buildLoop(rl as RawLoop, i));
+
+  // Parse the loop list, splitting normal loops from include directives (M1-GRAMMAR).
+  const includes: NonNullable<WorkflowDef['_includes']> = [];
+  const loops: LoopDef[] = [];
+  for (const [i, rl] of (r.loops as unknown[]).entries()) {
+    if (isIncludeDirective(rl)) {
+      const inc = parseIncludeDirective(rl, i, name);
+      includes.push({ pos: loops.length, ...inc });
+    } else {
+      loops.push(buildLoop(rl as RawLoop, i));
+    }
+  }
+
+  // M1-GRAMMAR post-parse cross-checks: duplicate as: and as:/loop-name collision.
+  if (includes.length > 0) {
+    const asSeen = new Set<string>();
+    const loopNameSet = new Set(loops.map((l) => l.name));
+    for (const inc of includes) {
+      if (asSeen.has(inc.as)) {
+        throw new DefError(`include 'as:' value '${inc.as}' is used more than once in workflow '${name}'`);
+      }
+      asSeen.add(inc.as);
+      if (loopNameSet.has(inc.as)) {
+        throw new DefError(`include 'as:' value '${inc.as}' collides with sibling loop name '${inc.as}' in workflow '${name}'`);
+      }
+    }
+  }
+
+  // Require at least one loop OR at least one include directive.
+  // (The loops array above may be empty if ALL entries are includes — that is fine
+  //  once expanded. But we still need the workflow to have some work.)
 
   const def: WorkflowDef = { name, inputs, loops };
+  if (includes.length > 0) def._includes = includes;
   if (r.title !== undefined) def.title = asString(r.title, 'title');
   if (r.description !== undefined) def.description = asString(r.description, 'description');
   const invariants = parseInvariants(r.invariants, 'invariants');
@@ -264,6 +354,181 @@ export function buildDef(raw: unknown, source?: string): WorkflowDef {
     if (outs.length > 0) def.outputs = outs;
   }
   return def;
+}
+
+// ---- Mode 1 expand helpers (M1-EXPAND) ----------------------------------------
+
+/**
+ * Prefix all names/stems in a LoopDef with `${prefix}.`. Pure — returns a new LoopDef.
+ * Rewrites: loop name, consume stems, produce stems, generates stems, invalidates, and
+ * effect.onInvalidate loop-name strings (but not 'pin'/'escalate').
+ */
+function prefixLoop(loop: LoopDef, prefix: string): LoopDef {
+  const prefixStem = (stem: string): string => `${prefix}.${stem}`;
+
+  const newConsumes = loop.consumes.map((c) => {
+    const stem = prefixStem(c.stem);
+    let raw: string;
+    if (c.mode === 'plain') {
+      raw = stem;
+    } else if (c.mode === 'map') {
+      raw = `${stem}[$${c.binder}]${c.suffix}`;
+    } else {
+      // reduce
+      raw = `${stem}[*]`;
+    }
+    return { ...c, stem, raw };
+  });
+
+  const prefixProduce = (p: ProducePattern): ProducePattern => {
+    const stem = prefixStem(p.stem);
+    let raw: string;
+    if (p.kind === 'singleton') {
+      raw = stem;
+    } else if (p.kind === 'collection') {
+      raw = `${stem}[]`;
+    } else {
+      // map
+      raw = `${stem}[$${p.binder}]${p.suffix}`;
+    }
+    return { ...p, stem, raw };
+  };
+
+  const newProduces = loop.produces.map(prefixProduce);
+  const newGenerates = loop.generates ? loop.generates.map(prefixProduce) : undefined;
+
+  const newInvalidates = loop.invalidates.map(prefixStem);
+
+  let newEffect = loop.effect;
+  if (loop.effect?.onInvalidate && loop.effect.onInvalidate !== 'pin' && loop.effect.onInvalidate !== 'escalate') {
+    newEffect = { ...loop.effect, onInvalidate: prefixStem(loop.effect.onInvalidate) };
+  }
+
+  const result: LoopDef = {
+    ...loop,
+    name: prefixStem(loop.name),
+    consumes: newConsumes,
+    produces: newProduces,
+    invalidates: newInvalidates,
+  };
+  if (newGenerates !== undefined) result.generates = newGenerates;
+  if (newEffect !== undefined) result.effect = newEffect;
+  return result;
+}
+
+/**
+ * Expand all `_includes` directives in a `WorkflowDef`, returning a new def with
+ * the child loops spliced in (prefixed + inputs rewired). Pure — never mutates input.
+ *
+ * `resolve` maps a def name to its un-expanded `WorkflowDef` (or undefined if unknown).
+ * `stack` tracks the include chain for cycle detection (defaults to `[def.name]`).
+ */
+export function expandIncludes(
+  def: WorkflowDef,
+  resolve: (name: string) => WorkflowDef | undefined,
+  stack?: string[],
+): WorkflowDef {
+  if (!def._includes || def._includes.length === 0) return def;
+
+  const currentStack = stack ?? [def.name];
+
+  // Build the ordered slot list: interleave normal loops and include directives by pos.
+  // Each include has a `pos` = index in the original loops array where it is inserted.
+  // We reconstruct the full ordered list in a single pass.
+  const sortedIncludes = [...def._includes].sort((a, b) => a.pos - b.pos);
+
+  const resultLoops: LoopDef[] = [];
+  const resultInputs: import('./types.ts').InputDef[] = [...def.inputs];
+  const resultOutputs: string[] = [...(def.outputs ?? [])];
+
+  // Walk the original loops interspersed with includes.
+  let loopIdx = 0;
+  let incIdx = 0;
+
+  while (loopIdx < def.loops.length || incIdx < sortedIncludes.length) {
+    // Emit all include directives whose pos <= current loop index.
+    while (incIdx < sortedIncludes.length && sortedIncludes[incIdx]!.pos <= loopIdx) {
+      const inc = sortedIncludes[incIdx]!;
+      incIdx++;
+
+      // (a) resolve child def
+      const childRaw = resolve(inc.defName);
+      if (!childRaw) {
+        throw new DefError(`include names workflow '${inc.defName}' which does not exist`);
+      }
+
+      // (b) cycle check
+      if (currentStack.includes(inc.defName)) {
+        throw new DefError(`include cycle: ${[...currentStack, inc.defName].join(' -> ')}`);
+      }
+
+      // (c) recurse: expand the child's includes first
+      const child = expandIncludes(childRaw, resolve, [...currentStack, inc.defName]);
+
+      // (d) M1-VALIDATE: inputs map keys must be real child inputs
+      const childInputNames = new Set(child.inputs.map((inp) => inp.name));
+      for (const k of Object.keys(inc.inputs)) {
+        if (!childInputNames.has(k)) {
+          throw new DefError(
+            `include 'as ${inc.as}' maps input '${k}' which workflow '${inc.defName}' does not declare`,
+          );
+        }
+      }
+
+      // (e) prefix child loops
+      const prefixedLoops = child.loops.map((l) => prefixLoop(l, inc.as));
+
+      // (f) handle inputs: mapped inputs become internal edges; unmapped are hoisted
+      const inputRewrites = new Map<string, string>(); // prefixed-stem -> outer artifact
+      for (const childInp of child.inputs) {
+        const prefixedStem = `${inc.as}.${childInp.name}`;
+        if (inc.inputs[childInp.name] !== undefined) {
+          // Mapped: rewrite consumes referencing this stem to the outer artifact
+          inputRewrites.set(prefixedStem, inc.inputs[childInp.name]!);
+        } else {
+          // Unmapped: hoist as outer input with prefixed name
+          resultInputs.push({ ...childInp, name: prefixedStem });
+        }
+      }
+
+      // Apply input rewrites to prefixed loops
+      const rewrittenLoops = prefixedLoops.map((l) => {
+        const rewrittenConsumes = l.consumes.map((c) => {
+          const outer = inputRewrites.get(c.stem);
+          if (outer !== undefined) {
+            // Replace the consume with a plain consume to the outer artifact
+            return { raw: outer, mode: 'plain' as const, stem: outer, suffix: '' };
+          }
+          return c;
+        });
+        return { ...l, consumes: rewrittenConsumes };
+      });
+
+      resultLoops.push(...rewrittenLoops);
+
+      // (g) merge child outputs
+      for (const stem of child.outputs ?? []) {
+        const prefixedStem = `${inc.as}.${stem}`;
+        if (!resultOutputs.includes(prefixedStem)) {
+          resultOutputs.push(prefixedStem);
+        }
+      }
+    }
+
+    // Emit the next normal loop (if any remain)
+    if (loopIdx < def.loops.length) {
+      resultLoops.push(def.loops[loopIdx]!);
+      loopIdx++;
+    }
+  }
+
+  return {
+    ...def,
+    loops: resultLoops,
+    inputs: resultInputs,
+    outputs: resultOutputs.length > 0 ? resultOutputs : def.outputs,
+    _includes: undefined,
+  };
 }
 
 /** Build a validated `WorkflowDef` from a parsed YAML object (or throw DefError). */
@@ -689,40 +954,18 @@ export function loadDefFile(file: string): WorkflowDef {
  * Load every workflow definition under `dir`: each `*.yaml` / `*.yml` file, and
  * each immediate subdirectory containing a `workflow.yaml`. Returns them keyed
  * by name (throwing on a duplicate name across files).
+ *
+ * Two-phase: Phase 1 builds every def (may have `_includes`). Phase 2 expands
+ * all includes and validates each expanded def. This lets includes reference sibling
+ * defs in the same directory (M1-SITE).
  */
 export function loadDefs(dir: string): Map<string, WorkflowDef> {
-  const out = new Map<string, WorkflowDef>();
-  const add = (def: WorkflowDef): void => {
-    if (out.has(def.name)) throw new DefError(`duplicate workflow name '${def.name}' under ${dir}`);
-    out.set(def.name, def);
-  };
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    const st = statSync(full);
-    if (st.isDirectory()) {
-      const wf = join(full, 'workflow.yaml');
-      try {
-        if (statSync(wf).isFile()) add(loadDefFile(wf));
-      } catch {
-        /* no workflow.yaml in this subdir — skip */
-      }
-    } else if (/\.ya?ml$/.test(entry) && entry !== 'workflow.yaml') {
-      add(loadDefFile(full));
-    }
-  }
-  return out;
-}
-
-/**
- * Like `loadDefs` but uses `buildDef` (not `parseDef`) so wiring errors are
- * returned in the lint result rather than thrown. Used by `oweflow lint`.
- * Silently skips files that fail shape-parsing (malformed YAML or bad types).
- */
-export function loadDefsRaw(dir: string): Map<string, WorkflowDef> {
-  const out = new Map<string, WorkflowDef>();
-  const add = (def: WorkflowDef): void => {
-    if (out.has(def.name)) throw new DefError(`duplicate workflow name '${def.name}' under ${dir}`);
-    out.set(def.name, def);
+  // Phase 1: build all defs (un-expanded) from disk.
+  const raw = new Map<string, WorkflowDef>();
+  const addRaw = (def: WorkflowDef, file: string): void => {
+    if (raw.has(def.name)) throw new DefError(`duplicate workflow name '${def.name}' under ${dir}`);
+    def.dir = file;
+    raw.set(def.name, def);
   };
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
@@ -732,14 +975,78 @@ export function loadDefsRaw(dir: string): Map<string, WorkflowDef> {
       try {
         if (statSync(wf).isFile()) {
           const text = readFileSync(wf, 'utf8');
-          add(buildDef(parseYaml(text), basename(wf)));
+          addRaw(buildDef(parseYaml(text), basename(wf)), wf);
+        }
+      } catch (e) {
+        if (e instanceof DefError) throw e;
+        /* no workflow.yaml in this subdir — skip */
+      }
+    } else if (/\.ya?ml$/.test(entry) && entry !== 'workflow.yaml') {
+      const text = readFileSync(full, 'utf8');
+      addRaw(buildDef(parseYaml(text), basename(full)), full);
+    }
+  }
+
+  // Phase 2: expand includes and validate each def.
+  const out = new Map<string, WorkflowDef>();
+  const resolver = (name: string): WorkflowDef | undefined => raw.get(name);
+  for (const [name, def] of raw) {
+    const expanded = expandIncludes(def, resolver);
+    const errors = validateDef(expanded);
+    if (errors.length) {
+      throw new DefError(
+        `invalid workflow '${name}' (${def.dir ?? 'unknown'}):\n  - ${errors.join('\n  - ')}`,
+      );
+    }
+    out.set(name, expanded);
+  }
+  return out;
+}
+
+/**
+ * Like `loadDefs` but uses `buildDef` (not `parseDef`) so wiring errors are
+ * returned in the lint result rather than thrown. Used by `oweflow lint`.
+ * Silently skips files that fail shape-parsing (malformed YAML or bad types).
+ *
+ * Two-phase: Phase 1 collects all defs. Phase 2 expands includes best-effort
+ * (silently skips expansion failures so the lint caller sees un-expanded defs).
+ */
+export function loadDefsRaw(dir: string): Map<string, WorkflowDef> {
+  // Phase 1: build all defs silently skipping malformed files.
+  const raw = new Map<string, WorkflowDef>();
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    const st = statSync(full);
+    if (st.isDirectory()) {
+      const wf = join(full, 'workflow.yaml');
+      try {
+        if (statSync(wf).isFile()) {
+          const text = readFileSync(wf, 'utf8');
+          const def = buildDef(parseYaml(text), basename(wf));
+          def.dir = wf;
+          if (!raw.has(def.name)) raw.set(def.name, def);
         }
       } catch { /* no workflow.yaml or buildDef failed shape-check — skip */ }
     } else if (/\.ya?ml$/.test(entry) && entry !== 'workflow.yaml') {
       try {
         const text = readFileSync(full, 'utf8');
-        add(buildDef(parseYaml(text), basename(full)));
+        const def = buildDef(parseYaml(text), basename(full));
+        def.dir = full;
+        if (!raw.has(def.name)) raw.set(def.name, def);
       } catch { /* malformed YAML or shape error — skip */ }
+    }
+  }
+
+  // Phase 2: expand includes best-effort; on failure keep the un-expanded def.
+  const out = new Map<string, WorkflowDef>();
+  const resolver = (name: string): WorkflowDef | undefined => raw.get(name);
+  for (const [name, def] of raw) {
+    try {
+      const expanded = expandIncludes(def, resolver);
+      out.set(name, expanded);
+    } catch {
+      // Expansion failed (e.g. missing child, cycle); keep un-expanded so lint can report.
+      out.set(name, def);
     }
   }
   return out;

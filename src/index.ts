@@ -32,7 +32,7 @@ export type { CreateEngineOpts, CreatedEngine } from './factory.ts';
 export { Store, openStore } from './store.ts';
 export type { ArtifactRow, RunRow, TaskRow, WorkflowRow } from './store.ts';
 
-export { buildDef, DefError, lintDef, loadDefFile, loadDefs, parseDef, validateDef } from './defs.ts';
+export { buildDef, DefError, expandIncludes, lintDef, loadDefFile, loadDefs, loadDefsRaw, parseDef, validateDef } from './defs.ts';
 
 export {
   applyOutcome,
