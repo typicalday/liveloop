@@ -374,6 +374,46 @@ unlike `terminal:` it stays re-armable.
 Validation: every stem in `outputs:` must be produced by at least one loop (stems under
 `generates:` count, since they are unioned into `produces` at build time).
 
+### Workflow composition (Mode 1 — compile-time `include:`)
+
+A loop-list entry may be an `include:` directive to splice another workflow's loops in at compile time (def-load time). This is pure `defs.ts` — zero engine change. The engine sees one expanded flat graph.
+
+```yaml
+name: full-cycle
+inputs:
+  - name: proposal
+    seedOwed: true
+outputs:
+  - torn_down
+loops:
+  - name: provision
+    consumes: [proposal]
+    produces: [environment]
+  - include: delivery           # splice delivery's loops in
+    as: deliver                 # prefix: deliver.planner, deliver.plan, deliver.merge …
+    inputs:
+      proposal: proposal        # map child's seedOwed input to outer 'proposal' artifact
+  - name: teardown
+    consumes: [environment, deliver.merge]   # consume the inlined child artifact directly
+    produces: [torn_down]
+```
+
+After loading, the expanded def's loops are:
+`provision`, `deliver.planner`, `deliver.builder`, `deliver.reviewer`, `deliver.merger`, `teardown` — one flat instance, one cascade, one completion evaluator.
+
+**Grammar rules:**
+- `as:` is required; must match `^[a-z][a-zA-Z0-9_-]*$`; must be unique across all includes in the same parent; must not equal any sibling loop name.
+- `inputs:` is optional; each key must be a real input of the child def.
+- `include:` must name a workflow present in the same def directory.
+
+**Semantics:**
+- **Mapped inputs** (`inputs: { childInput: outerArtifact }`) become internal consume edges — `outerArtifact` is an existing artifact in the parent (input or produce), checked by `validateDef`.
+- **Unmapped inputs** are hoisted as `${as}.${childInput}` outer inputs, preserving `seedOwed` and schema.
+- **Collection loops** in the child prefix correctly: `source[]` → `deliver.source[]`; seal and element paths follow from the prefixed stem.
+- **Nested includes** work recursively; cycles are a hard error.
+
+**Constraint:** Mode 1 inlines the child's namespace into the parent. Use it for **brand-new combined workflows** where no downstream tooling expects the old loop names. The existing `delivery` workflow's loops (`planner`, `builder`, `reviewer`, `merger`) become `deliver.planner` etc. — correct for a new `full-cycle` workflow, but would break `dev` tooling that expects the original names. For embedding an existing workflow as an encapsulated unit, use Mode 2 (`calls:`, a later PR).
+
 ### `effect:` — the loop effect contract
 
 A loop may declare `effect: { idempotent?, onInvalidate? }` to control how the engine
