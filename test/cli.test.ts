@@ -500,3 +500,63 @@ test('graph missing arg exits 1 with labelled error', () => {
   assert.equal(r.code, 1);
   assert.match(r.err, /missing required argument/);
 });
+
+// ---- green/emit/seal exit-code contract -------------------------------------
+
+test('green: clean success exits 0 and still prints the result JSON', () => {
+  const { run } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+  const planRun = run('tick', wf).json().orders[0].run;
+  const r = run('green', wf, planRun, 'plan', '--value', J({ plan: 'v1' }));
+  assert.equal(r.code, 0);
+  assert.equal(r.json().outcome, 'green');
+  assert.equal(r.err, '');
+});
+
+test('green: born-rejected exits non-zero and still prints result JSON', () => {
+  const { run } = makeCli();
+  const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
+  // Drive planner: green plan, close run
+  const planRun = run('tick', wf).json().orders.find((o: any) => o.loop === 'planner').run;
+  assert.equal(run('green', wf, planRun, 'plan', '--value', J({ plan: 'v1' })).code, 0);
+  run('close', wf, planRun);
+  // Claim builder (fingerprints plan@v1)
+  const builderRun = run('tick', wf).json().orders.find((o: any) => o.loop === 'builder').run;
+  // Reject plan from builder's perspective (builder consumes plan, so has authority)
+  run('reject', wf, 'plan', '--by', 'builder', '--text', 'changed my mind');
+  // Green pr from builder — plan no longer green => CAS mismatch => born-rejected
+  const r = run('green', wf, builderRun, 'pr', '--value', J({ url: 'pr/1' }));
+  assert.equal(r.code, 1);
+  const j = r.json();
+  assert.equal(j.outcome, 'born-rejected');
+  assert.match(r.err, /born-rejected/);
+});
+
+test('green: schema-rejected exits non-zero and still prints result JSON', () => {
+  const FIXTURES = join(import.meta.dirname, 'fixtures');
+  const { run } = makeCli({ defs: FIXTURES });
+  const wf = run('create', 'schemacheck', '--provide', `spec=${J({ goal: 'test' })}`).json().workflow;
+  const order = run('tick', wf).json().orders[0];
+  // steps must be integer >= 1 per schema; send a string to violate it
+  const r = run('green', wf, order.run, 'plan', '--value', J({ steps: 'not-a-number' }));
+  assert.equal(r.code, 1);
+  assert.equal(r.json().outcome, 'schema-rejected');
+  assert.match(r.err, /schema-rejected/);
+});
+
+test('emit: schema-rejected exits non-zero and still prints result JSON', () => {
+  const FIXTURES = join(import.meta.dirname, 'fixtures');
+  const { run } = makeCli({ defs: FIXTURES });
+  const wf = run('create', 'schemacheck', '--provide', `spec=${J({ goal: 'test' })}`).json().workflow;
+  // Drive planner to green so gather becomes available
+  const planOrder = run('tick', wf).json().orders[0];
+  run('green', wf, planOrder.run, 'plan', '--value', J({ steps: 1 }));
+  run('close', wf, planOrder.run);
+  // Now gather is ready
+  const gatherOrder = run('tick', wf).json().orders[0];
+  // Emit an item violating the schema (url must be a non-empty string)
+  const r = run('emit', wf, gatherOrder.run, '--items', J([{ noturl: 'bad' }]));
+  assert.equal(r.code, 1);
+  assert.notEqual(r.json().outcome, 'emitted');
+  assert.ok(r.err.length > 0);
+});

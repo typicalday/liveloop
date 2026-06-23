@@ -207,11 +207,11 @@ Commands:
 
 Environment: LIVELOOP_DB, LIVELOOP_DEFS`;
 
-function dispatch(command: string, io: CliIO, args: Args): void {
+function dispatch(command: string, io: CliIO, args: Args): number {
   // help and lint need no store
   if (command === 'help' || command === '--help' || command === '-h') {
     io.out(USAGE);
-    return;
+    return 0;
   }
 
   if (command === 'lint') {
@@ -236,7 +236,7 @@ function dispatch(command: string, io: CliIO, args: Args): void {
     }
 
     if (hasErrors) throw new CliError('one or more definitions have errors (see above)');
-    return;
+    return 0;
   }
 
   if (command === 'check') {
@@ -337,7 +337,7 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         `${report.deadlocks.length} deadlock(s), ${report.stuck.length} stuck state(s))`,
       );
     }
-    return;
+    return 0;
   }
 
   const ctx = openCtx(io, args);
@@ -351,7 +351,7 @@ function dispatch(command: string, io: CliIO, args: Args): void {
           inputs: d.inputs.map((i) => i.name),
           loops: d.loops.map((l) => l.name),
         })));
-        return;
+        return 0;
       }
       case 'create': {
         const defName = need(args, 1, 'def');
@@ -366,21 +366,21 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         if (Object.keys(params).length) opts.params = params as Record<string, string>;
         const id = engine.createInstance(defName, opts);
         print(io, { workflow: id });
-        return;
+        return 0;
       }
       case 'provide': {
         const wf = need(args, 1, 'workflow');
         const name = need(args, 2, 'name');
         engine.provideInput(wf, name, parseJson(last(args, 'value')));
         print(io, { ok: true, provided: name });
-        return;
+        return 0;
       }
       case 'tick': {
         const wf = need(args, 1, 'workflow');
         const nowRaw = last(args, 'now');
         const tickOpts = nowRaw !== undefined ? { now: Number(nowRaw) } : {};
         print(io, engine.tick(wf, tickOpts));
-        return;
+        return 0;
       }
       case 'status': {
         // `--all` is the fleet read: one call returns every instance's full
@@ -400,15 +400,15 @@ function dispatch(command: string, io: CliIO, args: Args): void {
             throw new CliError(`status --all takes no workflow argument (got "${stray}")`);
           }
           print(io, store.listWorkflows().map((w) => statusEntry(engine, w)));
-          return;
+          return 0;
         }
         print(io, engine.status(need(args, 1, 'workflow')));
-        return;
+        return 0;
       }
       case 'show': {
         const wf = need(args, 1, 'workflow');
         print(io, store.listArtifacts(wf));
-        return;
+        return 0;
       }
       case 'trace': {
         const wf = need(args, 1, 'workflow');
@@ -456,14 +456,14 @@ function dispatch(command: string, io: CliIO, args: Args): void {
           // default: JSON
           print(io, trace);
         }
-        return;
+        return 0;
       }
       case 'list': {
         print(io, store.listWorkflows().map((w) => {
           const s = safeStatus(engine, w.id);
           return { id: w.id, def: w.def, title: w.title ?? null, createdAt: w.createdAt, done: s };
         }));
-        return;
+        return 0;
       }
       case 'green': {
         const wf = need(args, 1, 'workflow');
@@ -472,7 +472,11 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         const value = parseJson(last(args, 'value'));
         const res = engine.green(wf, run, path, value, { terminal: flag(args, 'terminal') });
         print(io, res);
-        return;
+        if (res.outcome !== 'green') {
+          io.err(`green ${path}: ${res.outcome}${res.reason ? ' — ' + res.reason : ''}`);
+          return 1;
+        }
+        return 0;
       }
       case 'emit': {
         const wf = need(args, 1, 'workflow');
@@ -486,14 +490,24 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         }
         if (!Array.isArray(parsed)) throw new CliError('--items must be a JSON array');
         const items = parsed.map((v) => ({ value: v as Record<string, unknown> }));
-        print(io, engine.emit(wf, run, items));
-        return;
+        const emitRes = engine.emit(wf, run, items);
+        print(io, emitRes);
+        if (emitRes.outcome !== 'emitted') {
+          io.err(`emit: ${emitRes.outcome}${emitRes.reason ? ' — ' + emitRes.reason : ''}`);
+          return 1;
+        }
+        return 0;
       }
       case 'seal': {
         const wf = need(args, 1, 'workflow');
         const run = need(args, 2, 'run');
-        print(io, engine.seal(wf, run, parseJson(last(args, 'value'))));
-        return;
+        const sealRes = engine.seal(wf, run, parseJson(last(args, 'value')));
+        print(io, sealRes);
+        if (sealRes.outcome !== 'green') {
+          io.err(`seal ${sealRes.path}: ${sealRes.outcome}${sealRes.reason ? ' — ' + sealRes.reason : ''}`);
+          return 1;
+        }
+        return 0;
       }
       case 'reject':
       case 'retract':
@@ -504,7 +518,7 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         const text = needOpt(args, 'text');
         engine[command](wf, path, by, text);
         print(io, { ok: true, action: command, path });
-        return;
+        return 0;
       }
       case 'retry': {
         // text/by are optional: a retry can be a bare stall-clear or carry guidance
@@ -512,15 +526,16 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         const path = need(args, 2, 'path');
         engine.retry(wf, path, last(args, 'by') ?? 'human', last(args, 'text') ?? 'retry: stall cleared');
         print(io, { ok: true, action: 'retry', path });
-        return;
+        return 0;
       }
       case 'close': {
         const wf = need(args, 1, 'workflow');
         const run = need(args, 2, 'run');
         const outcome = (last(args, 'outcome') ?? 'ok') as 'ok' | 'no_work' | 'failed' | 'skipped';
+        // close has no outcome discriminator: engine throws on real errors, so {ok:true} is always accurate here.
         engine.close(wf, run, outcome, last(args, 'summary'));
         print(io, { ok: true, run, outcome });
-        return;
+        return 0;
       }
       case 'heartbeat': {
         const wf = need(args, 1, 'workflow');
@@ -528,13 +543,13 @@ function dispatch(command: string, io: CliIO, args: Args): void {
         const nowRaw = last(args, 'now');
         engine.heartbeat(wf, run, nowRaw !== undefined ? Number(nowRaw) : undefined);
         print(io, { ok: true, workflow: wf, run });
-        return;
+        return 0;
       }
       case 'delete': {
         const wf = need(args, 1, 'workflow');
         store.deleteWorkflow(wf);
         print(io, { ok: true, deleted: wf });
-        return;
+        return 0;
       }
       case 'graph': {
         const arg = need(args, 1, 'def-name or workflow-id');
@@ -577,7 +592,7 @@ function dispatch(command: string, io: CliIO, args: Args): void {
           // default: dot
           io.out(graphToDot(graph));
         }
-        return;
+        return 0;
       }
       default:
         throw new CliError(`unknown command: ${command}\n\n${USAGE}`);
@@ -621,8 +636,7 @@ export function main(argv: string[], io: CliIO = defaultIO()): number {
     return 0;
   }
   try {
-    dispatch(command, io, args);
-    return 0;
+    return dispatch(command, io, args);
   } catch (e) {
     if (e instanceof CliError || e instanceof DefError) {
       io.err(`error: ${e.message}`);

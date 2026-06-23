@@ -196,6 +196,8 @@ Global: `--db <path>` (env `LIVELOOP_DB`, default `.liveloop/state.db`) and
 | `close <wf> <run> [--outcome ok\|no_work\|failed\|skipped] [--summary s]` | release a claimed run's lease |
 | `delete <wf>` | delete an instance and all its rows |
 
+**Exit codes for `green` / `emit` / `seal`:** these verbs exit non-zero when the engine refuses the commit (`born-rejected` or `schema-rejected`). The result JSON is always written to stdout regardless of outcome; the human-readable reason goes to stderr. A success commit exits 0.
+
 ### The order shape (what a worker consumes)
 
 `tick` returns `{ workflow, orders, reaped }`. Each order is self-contained:
