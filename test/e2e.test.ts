@@ -139,7 +139,9 @@ test('research: collection fan-out, retract, born-rejected CAS, and reduce re-de
   ow('close', wf, c1.run, '--outcome', 'skipped');
 
   // greening the draft on the *pre-retract* synth run must born-reject: an input moved
-  const stale = ow('green', wf, synth.run, 'draft', '--value', JSON.stringify({ answer: 'v1' }));
+  // Use raw() because born-rejected now exits non-zero; stdout still carries the JSON result.
+  const staleRaw = raw(db, ['green', wf, synth.run, 'draft', '--value', JSON.stringify({ answer: 'v1' })]);
+  const stale = JSON.parse(staleRaw.stdout.trim());
   assert.equal(stale.outcome, 'born-rejected', JSON.stringify(stale));
   ow('close', wf, synth.run, '--outcome', 'failed');
 

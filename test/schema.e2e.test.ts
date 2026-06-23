@@ -32,6 +32,14 @@ function harness(defsDir: string = FIXTURES) {
     const out = r.stdout.trim();
     return out ? JSON.parse(out) : null;
   };
+  // owAny: like ow but tolerates a non-zero exit. stdout is always JSON (the
+  // engine always prints the result before checking outcome); stderr carries the
+  // human-readable reason when exit is non-zero. Returns parsed JSON from stdout.
+  ow.any = (...args: string[]): any => {
+    const r = run(...args);
+    const out = r.stdout.trim();
+    return out ? JSON.parse(out) : null;
+  };
   ow.raw = (...args: string[]) => run(...args);
   ow.cleanup = () => rmSync(dirname(db), { recursive: true, force: true });
   return ow;
@@ -79,7 +87,7 @@ test('schema e2e: a malformed singleton commit is schema-rejected, not greened',
   const pl = claim(ow, wf, 'planner');
 
   // `steps` must be an integer >= 1; a string violates the schema
-  const res = ow('green', wf, pl.run, 'plan', '--value', J({ steps: 'three' }));
+  const res = ow.any('green', wf, pl.run, 'plan', '--value', J({ steps: 'three' }));
   assert.equal(res.outcome, 'schema-rejected');
   assert.equal(res.path, 'plan');
   assert.ok(Array.isArray(res.issues) && res.issues.length > 0, 'carries the violations');
@@ -108,7 +116,7 @@ test('schema e2e: a corrected value greens on the same open run', () => {
   const ow = harness();
   const wf = ow('create', 'schemacheck', '--provide', `spec=${J({ goal: 'ship it' })}`).workflow;
   const pl = claim(ow, wf, 'planner');
-  assert.equal(ow('green', wf, pl.run, 'plan', '--value', J({ steps: 0 })).outcome, 'schema-rejected'); // < minimum
+  assert.equal(ow.any('green', wf, pl.run, 'plan', '--value', J({ steps: 0 })).outcome, 'schema-rejected'); // < minimum
   // no new tick/claim needed — the worker fixes the value on the same lease
   assert.equal(ow('green', wf, pl.run, 'plan', '--value', J({ steps: 2 })).outcome, 'green');
   assert.equal(art(ow, wf, 'plan').acceptance, 'green');
@@ -121,8 +129,8 @@ test('schema e2e: repeated failures stall the producer, and retry clears it', ()
   const pl = claim(ow, wf, 'planner');
 
   // maxSchemaFailures: 2 → two bad commits trip the §18 stall
-  ow('green', wf, pl.run, 'plan', '--value', J({ steps: -1 }));
-  ow('green', wf, pl.run, 'plan', '--value', J({ wrong: true }));
+  ow.any('green', wf, pl.run, 'plan', '--value', J({ steps: -1 }));
+  ow.any('green', wf, pl.run, 'plan', '--value', J({ wrong: true }));
   assert.equal(art(ow, wf, 'plan').schemaRejects, 2);
   ow('close', wf, pl.run, '--outcome', 'no_work');
 
@@ -149,7 +157,7 @@ test('schema e2e: a malformed collection element refuses the whole emit atomical
   const g = claim(ow, wf, 'gather');
 
   // second element is missing `url` → the entire emit is refused, nothing accretes
-  const bad = ow('emit', wf, g.run, '--items', J([{ url: 'http://a' }, { bogus: 1 }]));
+  const bad = ow.any('emit', wf, g.run, '--items', J([{ url: 'http://a' }, { bogus: 1 }]));
   assert.equal(bad.outcome, 'schema-rejected');
   assert.deepEqual(bad.created, []);
   assert.ok(!art(ow, wf, 'source[0]'), 'no member written');
@@ -196,7 +204,7 @@ test('schema e2e: the bundled `intake` example runs its documented walkthrough',
   const parse = claim(ow, wf, 'parse');
   // the malformed value the header flags as refused really is schema-rejected
   assert.equal(
-    ow('green', wf, parse.run, 'spec', '--value', J({ endpoint: 'not-a-url' })).outcome,
+    ow.any('green', wf, parse.run, 'spec', '--value', J({ endpoint: 'not-a-url' })).outcome,
     'schema-rejected',
   );
   // ...and the conforming one greens on the same open run
@@ -208,7 +216,7 @@ test('schema e2e: the bundled `intake` example runs its documented walkthrough',
 
   const fetch = claim(ow, wf, 'fetch');
   // one malformed element refuses the whole emit atomically
-  const bad = ow('emit', wf, fetch.run, '--items', J([{ id: 'a1', title: 'First' }, { bogus: 1 }]));
+  const bad = ow.any('emit', wf, fetch.run, '--items', J([{ id: 'a1', title: 'First' }, { bogus: 1 }]));
   assert.equal(bad.outcome, 'schema-rejected');
   assert.deepEqual(bad.created, []);
   // the clean emit then accretes both elements

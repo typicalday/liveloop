@@ -33,6 +33,14 @@ function harness(defsDir: string = EXAMPLES) {
     const out = r.stdout.trim();
     return out ? JSON.parse(out) : null;
   };
+  // owAny: like ow but tolerates a non-zero exit. stdout is always JSON (the
+  // engine always prints the result before checking outcome); stderr carries the
+  // human-readable reason when exit is non-zero. Returns parsed JSON from stdout.
+  ow.any = (...args: string[]): any => {
+    const r = run(...args);
+    const out = r.stdout.trim();
+    return out ? JSON.parse(out) : null;
+  };
   ow.raw = (...args: string[]) => run(...args);
   ow.cleanup = () => rmSync(dirname(db), { recursive: true, force: true });
   return ow;
@@ -232,7 +240,7 @@ test('collection: emit on a stale run (input moved) born-rejects the seal, creat
   const g = claim(ow, wf, 'gather'); // snapshots question@v1
   ow('reject', wf, 'question', '--by', 'gather', '--text', 'question changed underneath us');
 
-  const res = ow('emit', wf, g.run, '--items', J([{ url: 'a' }]));
+  const res = ow.any('emit', wf, g.run, '--items', J([{ url: 'a' }]));
   assert.deepEqual(res.created, [], 'no elements are accreted from a stale run');
   assert.equal(art(ow, wf, 'gather.source.sealed').acceptance, 'rejected', 'the seal is born-rejected');
   assert.ok(!art(ow, wf, 'gather.source[0]'), 'no member artifact was written');
@@ -246,7 +254,7 @@ test('collection: seal on a stale run (input moved) is born-rejected', () => {
   ow('emit', wf, g.run, '--items', J([{ url: 'a' }])); // emit while still fresh
   ow('reject', wf, 'question', '--by', 'gather', '--text', 'changed mid-run');
 
-  const res = ow('seal', wf, g.run);
+  const res = ow.any('seal', wf, g.run);
   assert.equal(res.outcome, 'born-rejected');
   assert.match(res.reason, /not green at commit/);
   assert.equal(art(ow, wf, 'gather.source.sealed').acceptance, 'rejected');
@@ -269,7 +277,7 @@ test('CAS: a plain commit is born-rejected when its input moved during the run',
   ow('reject', wf, 'plan', '--by', 'builder', '--text', 'changed my mind');
 
   // committing the stale builder run must be born-rejected, never green-for-an-instant
-  const res = ow('green', wf, builder.run, 'pr', '--value', J({ pr: '#1' }));
+  const res = ow.any('green', wf, builder.run, 'pr', '--value', J({ pr: '#1' }));
   assert.equal(res.outcome, 'born-rejected');
   const pr = art(ow, wf, 'pr');
   assert.equal(pr.acceptance, 'rejected');
