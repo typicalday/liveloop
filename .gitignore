@@ -6,7 +6,6 @@ node_modules/
 *.sqlite-shm
 *.sqlite-wal
 .owenloop/
-.oweflow/
 coverage/
 
 # dev delivery-system scaffolding (local foreman state — not part of the library)
