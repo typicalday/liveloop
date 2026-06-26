@@ -1,5 +1,5 @@
 /**
- * The liveloop CLI — a thin, scriptable surface over the engine.
+ * The owenloop CLI — a thin, scriptable surface over the engine.
  *
  * Every data command prints JSON to stdout, so a *wiring* (the worker/automation
  * that actually runs orders) can drive the engine programmatically: `tick` to
@@ -7,25 +7,25 @@
  * report outcomes. The engine itself is domain-neutral; this binary just maps
  * argv to engine calls.
  *
- *   liveloop defs                       list available workflow definitions
- *   liveloop create <def> [--provide n=json] [--title t]   start an instance
- *   liveloop provide <wf> <name> [--value json]   supply an owed input
- *   liveloop tick <wf> [--now ms]       pull eligible orders
- *   liveloop status <wf>                derive debts / eligible / blocked
- *   liveloop status --all               every instance's status in one call (fleet read)
- *   liveloop show <wf>                  dump raw artifacts (debugging)
- *   liveloop list                       list instances
- *   liveloop green <wf> <run> <path> [--value json] [--terminal]
- *   liveloop emit  <wf> <run> --items '[{...},{...}]'
- *   liveloop seal  <wf> <run> [--value json]
- *   liveloop reject  <wf> <path> --by <author> --text <msg>
- *   liveloop retract <wf> <path> --by <author> --text <msg>
- *   liveloop skip    <wf> <path> --by <author> --text <msg>
- *   liveloop retry   <wf> <path> [--by <author>] [--text <guidance>]   clear a stall
- *   liveloop close <wf> <run> [--outcome ok|no_work|failed|skipped] [--summary s]
- *   liveloop delete <wf>
+ *   owenloop defs                       list available workflow definitions
+ *   owenloop create <def> [--provide n=json] [--title t]   start an instance
+ *   owenloop provide <wf> <name> [--value json]   supply an owed input
+ *   owenloop tick <wf> [--now ms]       pull eligible orders
+ *   owenloop status <wf>                derive debts / eligible / blocked
+ *   owenloop status --all               every instance's status in one call (fleet read)
+ *   owenloop show <wf>                  dump raw artifacts (debugging)
+ *   owenloop list                       list instances
+ *   owenloop green <wf> <run> <path> [--value json] [--terminal]
+ *   owenloop emit  <wf> <run> --items '[{...},{...}]'
+ *   owenloop seal  <wf> <run> [--value json]
+ *   owenloop reject  <wf> <path> --by <author> --text <msg>
+ *   owenloop retract <wf> <path> --by <author> --text <msg>
+ *   owenloop skip    <wf> <path> --by <author> --text <msg>
+ *   owenloop retry   <wf> <path> [--by <author>] [--text <guidance>]   clear a stall
+ *   owenloop close <wf> <run> [--outcome ok|no_work|failed|skipped] [--summary s]
+ *   owenloop delete <wf>
  *
- * Global: --db <path> (env LIVELOOP_DB), --defs <dir> (env LIVELOOP_DEFS).
+ * Global: --db <path> (env OWENLOOP_DB), --defs <dir> (env OWENLOOP_DEFS).
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
@@ -157,8 +157,8 @@ interface Ctx {
 }
 
 function openCtx(io: CliIO, args: Args): Ctx {
-  const dbPath = last(args, 'db') ?? io.env.LIVELOOP_DB ?? join(io.cwd, '.liveloop', 'state.db');
-  const defsDir = last(args, 'defs') ?? io.env.LIVELOOP_DEFS ?? join(io.cwd, 'workflows');
+  const dbPath = last(args, 'db') ?? io.env.OWENLOOP_DB ?? join(io.cwd, '.owenloop', 'state.db');
+  const defsDir = last(args, 'defs') ?? io.env.OWENLOOP_DEFS ?? join(io.cwd, 'workflows');
   mkdirSync(dirname(dbPath), { recursive: true });
   const store = openStore(dbPath);
   const defs = existsSync(defsDir) ? loadDefs(defsDir) : new Map<string, WorkflowDef>();
@@ -176,9 +176,9 @@ function print(io: CliIO, value: unknown): void {
 
 // ---- commands ----------------------------------------------------------------
 
-const USAGE = `liveloop — a dataflow workflow engine
+const USAGE = `owenloop — a dataflow workflow engine
 
-Usage: liveloop <command> [args] [--db <path>] [--defs <dir>]
+Usage: owenloop <command> [args] [--db <path>] [--defs <dir>]
 
 Commands:
   defs                                   list available workflow definitions
@@ -205,7 +205,7 @@ Commands:
   close <wf> <run> [--outcome ok|no_work|failed|skipped] [--summary s]
   delete <wf>
 
-Environment: LIVELOOP_DB, LIVELOOP_DEFS`;
+Environment: OWENLOOP_DB, OWENLOOP_DEFS`;
 
 function dispatch(command: string, io: CliIO, args: Args): number {
   // help and lint need no store
@@ -215,7 +215,7 @@ function dispatch(command: string, io: CliIO, args: Args): number {
   }
 
   if (command === 'lint') {
-    const defsDir = last(args, 'defs') ?? io.env.LIVELOOP_DEFS ?? join(io.cwd, 'workflows');
+    const defsDir = last(args, 'defs') ?? io.env.OWENLOOP_DEFS ?? join(io.cwd, 'workflows');
     const defs = existsSync(defsDir) ? loadDefsRaw(defsDir) : new Map<string, WorkflowDef>();
     const defName = args.positionals[1];
     let hasErrors = false;
@@ -240,7 +240,7 @@ function dispatch(command: string, io: CliIO, args: Args): number {
   }
 
   if (command === 'check') {
-    const defsDir = last(args, 'defs') ?? io.env.LIVELOOP_DEFS ?? join(io.cwd, 'workflows');
+    const defsDir = last(args, 'defs') ?? io.env.OWENLOOP_DEFS ?? join(io.cwd, 'workflows');
     const defs = existsSync(defsDir) ? loadDefsRaw(defsDir) : new Map<string, WorkflowDef>();
     const defName = need(args, 1, 'def');
     const def = defs.get(defName);
@@ -276,7 +276,7 @@ function dispatch(command: string, io: CliIO, args: Args): number {
       const clean = report.deadlocks.length === 0 && report.stuck.length === 0
         && report.invariantViolations.length === 0;
       const status = clean && report.completable ? 'OK' : clean ? 'INCOMPLETE' : 'DEFECTS FOUND';
-      io.out(`=== liveloop check: ${def.name} ===`);
+      io.out(`=== owenloop check: ${def.name} ===`);
       io.out(`Status: ${status}`);
       io.out(`Completable: ${report.completable ? 'yes' : 'no'}`);
       io.out(`States explored: ${report.stats.statesExplored}, max depth: ${report.stats.depthReached}`);

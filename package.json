@@ -1,17 +1,17 @@
 {
-  "name": "liveloop",
+  "name": "owenloop",
   "version": "0.1.0",
-  "description": "A generic dataflow workflow engine — steps that owe and consume artifacts, advanced by debt and reason-carrying invalidation. Direct node:sqlite (WAL + commit-fingerprint CAS).",
+  "description": "Owen — a debt-driven dataflow engine. Steps fire on what they owe, not a status; the graph stays honest with its live inputs and knows when to stop. The disciplined engine for your Ralph loop. Direct node:sqlite (WAL + commit-fingerprint CAS).",
   "license": "Apache-2.0",
   "author": "typicalday",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/typicalday/liveloop.git"
+    "url": "git+https://github.com/typicalday/owenloop.git"
   },
-  "homepage": "https://github.com/typicalday/liveloop#readme",
+  "homepage": "https://github.com/typicalday/owenloop#readme",
   "bugs": {
-    "url": "https://github.com/typicalday/liveloop/issues"
+    "url": "https://github.com/typicalday/owenloop/issues"
   },
   "keywords": [
     "workflow",
@@ -23,7 +23,7 @@
     "state-machine"
   ],
   "bin": {
-    "liveloop": "bin/liveloop.mjs"
+    "owenloop": "bin/owenloop.mjs"
   },
   "exports": {
     ".": {
@@ -41,7 +41,7 @@
     "access": "public"
   },
   "scripts": {
-    "liveloop": "node bin/liveloop.mjs",
+    "owenloop": "node bin/owenloop.mjs",
     "test": "node --test --test-reporter=spec test/*.test.ts",
     "test:quiet": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",

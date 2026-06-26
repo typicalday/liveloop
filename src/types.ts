@@ -1,5 +1,5 @@
 /**
- * Shared types for the liveloop engine.
+ * Shared types for the owenloop engine.
  *
  * The engine is domain-neutral: nothing here knows what a "PR" or a "report"
  * is. A workflow is a graph of loops wired by the artifacts they consume and
@@ -234,7 +234,7 @@ export interface WorkflowDef {
    *  A stem listed here that no loop produces is a hard validateDef error. */
   outputs?: string[];
   dir?: string; // source directory, if loaded from disk
-  /** Declared safety invariants verified by `modelCheck`/`liveloop check`. */
+  /** Declared safety invariants verified by `modelCheck`/`owenloop check`. */
   invariants?: InvariantDef[];
   /**
    * @internal Mode 1 include directives before expansion. Set by `buildDef` when a

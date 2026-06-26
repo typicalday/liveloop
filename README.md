@@ -1,25 +1,70 @@
-# liveloop
+# owenloop
 
-[![CI](https://github.com/typicalday/liveloop/actions/workflows/ci.yml/badge.svg)](https://github.com/typicalday/liveloop/actions/workflows/ci.yml)
+[![CI](https://github.com/typicalday/owenloop/actions/workflows/ci.yml/badge.svg)](https://github.com/typicalday/owenloop/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-A generic **dataflow workflow engine**. Steps don't have a status — they have
-*debts*. A step becomes eligible to run purely because of the state of the
-artifacts it consumes and produces, never because something flipped it to
-"ready". That one inversion buys you a lot: knock-backs, fan-out/fan-in, and
-"keep everything downstream honest when an upstream input changes" all fall out
-of the same rule instead of being special-cased.
+> **Owen keeps the books.** A debt-driven dataflow engine that runs a graph of
+> work by tracking what's *owed*, not what's *done* — and, unlike a bare agent
+> loop, knows when to stop.
+
+A generic **dataflow workflow engine**. Steps don't carry a status you flip to
+*running* or *done* — they carry **debts**. A step becomes eligible the moment
+two things are true at once: it *owes* an output, and everything it consumes is
+`green` (accepted). That's the entire scheduler — there is no status column
+anywhere. The framing is **pay-when-paid**: you can only pay what you owe once
+what's owed *to you* has been paid, and that rule runs recursively down the
+graph. Change something upstream and everything built on it silently falls back
+to a debt — no orchestration code, no manual invalidation. Knock-backs,
+fan-out/fan-in, and "keep everything downstream honest" all fall out of that one
+rule instead of being special-cased.
+
+Think of the engine as a **foreman who manages by exception** — his name is
+Owen. You declare the wiring and walk away: Owen pulls work just-in-time, keeps
+the whole graph honest against its live inputs, remembers *why* a step failed
+last time, and only taps you on the shoulder when a step has genuinely failed
+too many times.
+
+### Ralph does the reps. Owen keeps score.
+
+If you've run a coding agent in a `while true` loop — the [Ralph
+technique](https://ghuntley.com/ralph/) — you know the trade: it's gloriously
+persistent, but it leans on a TODO file and git for memory and doesn't really
+know *when it's done* or *why the last pass fell short*. **owenloop is the layer
+Ralph is missing.** They aren't rivals — they're two halves of one machine, one
+wrapped inside the other:
+
+```
+   ┌─► RALPH ── the outer driver loop (the muscle): keep ticking, never stop
+   │      │
+   │      │     OWEN ── the engine (the memory + the brakes)
+   │      │       • what's owed?      • is every input green?
+   │      │       • what failed last pass, and why?
+   │      │       • is the graph done — or stalled, needing a human?
+   │      │            │
+   │      │            ▼  hands out an order
+   │      └─►  your worker / agent does the work ──► green / reject
+   │                                                      │
+   └──────────────────  Ralph ticks again  ◄─────────────┘
+```
+
+Ralph supplies **persistence** — unlimited retries, a fresh context each pass.
+Owen supplies **judgment and termination** — a typed debt graph that knows what
+each step owes, carries the reasons a step was rejected, invalidates downstream
+work the moment an input moves, and *stops re-arming a step that has failed too
+many times*. Ralph alone diverges; wrap Owen inside it and the loop converges.
+Owen doesn't run the work or replace your agent — the agent is still Ralph's
+payload. Owen is the state and the brakes between ticks.
 
 The engine is **domain-neutral**. It doesn't know what a "PR" or a "source" or a
 "report" is. A concrete process — software delivery, research synthesis, triage
 — is just a *wiring*: a set of workflow definitions (YAML) plus a worker that
-executes the orders the engine hands out. The `liveloop` CLI is the seam between
+executes the orders the engine hands out. The `owenloop` CLI is the seam between
 the two: it speaks JSON on stdout so any worker can drive it.
 
 ```
                  wiring (YAML defs + a worker)
    ────────────────────────────────────────────────────────
-   liveloop CLI   ──tick──►  orders  ──run──►  green / reject
+   owenloop CLI   ──tick──►  orders  ──run──►  green / reject
    ────────────────────────────────────────────────────────
                  engine (debt model + forward cascade + CAS)
                  store  (better-sqlite3, WAL + commit CAS)
@@ -79,8 +124,8 @@ Three things make this more than a topological sort:
 - **Stalls (liveness, §6/§19).** If an artifact is judgment-rejected more than
   its loop's `maxAttempts` — or schema-rejected more than its `maxSchemaFailures`
   — the engine **stops re-arming it**. It stays a debt but no longer produces
-  orders — the loop has demonstrably failed and a human is needed. `liveloop
-  retry` resets both counters (optionally with new guidance); `liveloop retract`
+  orders — the loop has demonstrably failed and a human is needed. `owenloop
+  retry` resets both counters (optionally with new guidance); `owenloop retract`
   drops it (for collection members).
 
 Collections add fan-out/fan-in:
@@ -95,28 +140,28 @@ Collections add fan-out/fan-in:
 
 ## Requirements
 
-- **Node ≥ 22.6** — liveloop runs TypeScript directly via Node's native type
+- **Node ≥ 22.6** — owenloop runs TypeScript directly via Node's native type
   stripping. There is no build step. (Developed on Node 25.)
 - Runtime deps: `better-sqlite3` (storage), `yaml` (defs), and
   `@cfworker/json-schema` (artifact schema validation, §19) — all
   zero- or low-transitive.
 
 ```sh
-git clone <repo> liveloop && cd liveloop
+git clone <repo> owenloop && cd owenloop
 npm install
 npm run check     # typecheck + full test suite
 ```
 
-Or consume it as a dependency — liveloop ships its TypeScript source (no build
+Or consume it as a dependency — owenloop ships its TypeScript source (no build
 step), so the importing project just needs a Node ≥ 22.6 ESM host with
 type-stripping (on by default in 23.6+):
 
 ```sh
-npm install liveloop
+npm install owenloop
 ```
 
 ```ts
-import { createEngine } from 'liveloop';   // see "Programmatic / embedding" below
+import { createEngine } from 'owenloop';   // see "Programmatic / embedding" below
 ```
 
 ---
@@ -130,38 +175,38 @@ demonstrating one idea: [`delivery`](examples/workflows/delivery.yaml)
 [`intake`](examples/workflows/intake.yaml) (schema validation, §19), and
 [`sla-watchdog`](examples/workflows/sla-watchdog.yaml) (idle trigger, completion
 evaluator, alarm — §21). Point
-liveloop at them and drive one end to end. Every data command prints JSON, so the
+owenloop at them and drive one end to end. Every data command prints JSON, so the
 snippet below pipes through `jq`.
 
 ```sh
-export LIVELOOP_DEFS=examples/workflows
-export LIVELOOP_DB=/tmp/liveloop-demo.db
+export OWENLOOP_DEFS=examples/workflows
+export OWENLOOP_DB=/tmp/owenloop-demo.db
 
-liveloop defs                                  # what workflows are available
+owenloop defs                                  # what workflows are available
 
 # start an instance; `proposal` is a seedOwed input so we provide it up front
-wf=$(liveloop create delivery \
+wf=$(owenloop create delivery \
        --provide proposal='{"text":"add dark mode"}' | jq -r .workflow)
 
 # the wiring/worker loop: tick → run → report
-run=$(liveloop tick $wf | jq -r '.orders[0].run')   # claim the `planner` order
-liveloop green  $wf $run plan --value '{"plan":"…"}' # report its output
+run=$(owenloop tick $wf | jq -r '.orders[0].run')   # claim the `planner` order
+owenloop green  $wf $run plan --value '{"plan":"…"}' # report its output
 
-liveloop status $wf                            # debts / eligible / blocked / done
+owenloop status $wf                            # debts / eligible / blocked / done
 ```
 
-`liveloop` here is `node bin/liveloop.mjs` — either run that directly, use the
-`npm run liveloop --` script, or `npm link` to put `liveloop` on your PATH.
+`owenloop` here is `node bin/owenloop.mjs` — either run that directly, use the
+`npm run owenloop --` script, or `npm link` to put `owenloop` on your PATH.
 
 A **knock-back**: when an order for `reviewer` comes up, instead of greening its
 `verdict` you can reject the PR —
 
 ```sh
-liveloop reject $wf pr --by reviewer --text "tests are missing"
+owenloop reject $wf pr --by reviewer --text "tests are missing"
 ```
 
 — which re-arms `builder` with that reason attached to its next order's `owes`.
-Do it past `builder`'s `maxAttempts` and `pr` **stalls**; `liveloop retry $wf pr
+Do it past `builder`'s `maxAttempts` and `pr` **stalls**; `owenloop retry $wf pr
 --text "use the new fixture"` clears it.
 
 The [`research`](examples/workflows/research.yaml) example demonstrates the
@@ -174,8 +219,8 @@ is refused at commit. Each example's header comment walks through the commands.
 
 ## CLI reference
 
-Global: `--db <path>` (env `LIVELOOP_DB`, default `.liveloop/state.db`) and
-`--defs <dir>` (env `LIVELOOP_DEFS`, default `./workflows`).
+Global: `--db <path>` (env `OWENLOOP_DB`, default `.owenloop/state.db`) and
+`--defs <dir>` (env `OWENLOOP_DEFS`, default `./workflows`).
 
 | command | what it does |
 |---|---|
@@ -233,15 +278,15 @@ The CLI is a thin adapter — it maps `argv` to engine calls and prints JSON. Th
 engine itself is an ordinary class, so you can drive it **in-process** and get
 the same lifecycle back as typed objects (`Order`, `CommitResult`,
 `WorkflowStatus`) instead of JSON on stdout — no subprocess, no parsing. The
-[`liveloop`](package.json) package's entry point exports everything you need.
+[`owenloop`](package.json) package's entry point exports everything you need.
 
 `createEngine` bundles the store + definition wiring into one call:
 
 ```ts
-import { createEngine } from 'liveloop';
+import { createEngine } from 'owenloop';
 
 const { engine, store } = createEngine({
-  db: '.liveloop/state.db',          // or ':memory:' for an ephemeral instance
+  db: '.owenloop/state.db',          // or ':memory:' for an ephemeral instance
   defsDir: 'workflows',             // load YAML defs from a dir … or pass `defs: [myDef]`
 });
 
@@ -355,7 +400,7 @@ loops:
 
 ### `produces:` vs `generates:`
 
-A stem under `produces:` is expected to be consumed downstream; liveloop lint warns if it
+A stem under `produces:` is expected to be consumed downstream; owenloop lint warns if it
 isn't. A stem under `generates:` is intentionally consumed by nothing (an audit log, an
 external artifact, or a dev-branch stub); lint leaves it alone. Generated artifacts are
 identical to produced ones in every other respect: schema-validated, fingerprinted,
@@ -512,8 +557,8 @@ routes when the loop's green artifact's inputs move to a newer version (§20):
     re-fire. Use when stale-but-shipped is acceptable.
   - **`onInvalidate: 'escalate'` (default when `idempotent: false`)** — the artifact is
     rejected-and-held (`isHeld`). The producer does not auto-re-fire; the debt surfaces as
-    `stalled: true` with `kind: 'invalidated-irreversible'` in `liveloop status`, requiring
-    human intervention (`liveloop retry` / fix upstream / accept-as-is).
+    `stalled: true` with `kind: 'invalidated-irreversible'` in `owenloop status`, requiring
+    human intervention (`owenloop retry` / fix upstream / accept-as-is).
 
 `terminal: true` is the legacy spelling for `effect: { idempotent: false, onInvalidate: 'pin' }`
 plus the dead-end lint exemption. The two coexist on the same engine version and are mutually
@@ -578,7 +623,7 @@ By default, a loop fires when its consumed inputs are all green (`inputsGreen`).
 ```typescript
 // inside an idle-trigger worker body:
 engine.setAlarm(workflowId, 'completion', Date.now() + 3_600_000); // re-arm in 1 hour
-await liveloop.green(order.run, { /* ... */ });
+await owenloop.green(order.run, { /* ... */ });
 ```
 
 **`engine.nextAlarm(workflow)`** returns `{ dueAt: number | null; isDue: boolean }` — the earliest pending idle threshold across all idle loops in the workflow. An external scheduler uses this to decide when to wake the instance.
@@ -607,7 +652,7 @@ rules are enforced by the validator, not left to runtime surprise.
 
 ## The wiring concept
 
-liveloop deliberately stops at "here is an order; tell me the outcome." A
+owenloop deliberately stops at "here is an order; tell me the outcome." A
 **wiring** supplies the two things the engine refuses to assume:
 
 1. **What the steps mean** — the YAML definitions (the `delivery`/`research`
@@ -616,12 +661,12 @@ liveloop deliberately stops at "here is an order; tell me the outcome." A
 
    ```
    for each workflow:
-     { orders } = liveloop tick $wf
+     { orders } = owenloop tick $wf
      for each order:
        result = run(order.prompt, order.consumes, order.owes)   # ← your domain
-       if result.ok:        liveloop green   $wf $order.run $output --value …
-       else if rejected:    liveloop reject  $wf $artifact --by $loop --text …
-       liveloop close $wf $order.run --outcome …
+       if result.ok:        owenloop green   $wf $order.run $output --value …
+       else if rejected:    owenloop reject  $wf $artifact --by $loop --text …
+       owenloop close $wf $order.run --outcome …
    ```
 
 A coding agent that opens PRs is one such worker; a research bot that fetches and
@@ -673,7 +718,7 @@ npm run check     # both
 The suite (172 tests) spans unit tests (`paths`, `store`, `model`, `defs`,
 `schema`, `util`, `cli`), engine integration tests (the cascade, the §6 stall,
 schema validation/§19, concurrency/CAS), and **47 end-to-end tests** that spawn
-the real `bin/liveloop.mjs` binary and drive the example workflows through their
+the real `bin/owenloop.mjs` binary and drive the example workflows through their
 full lifecycles.
 
 Two e2e files carry most of that weight, by opposite intent.
@@ -703,7 +748,7 @@ input is refused at `create` with a non-zero exit.
 
 ## Design reference
 
-liveloop is a faithful, decoupled implementation of an internal dataflow-engine
+owenloop is a faithful, decoupled implementation of an internal dataflow-engine
 spec. [`docs/design.md`](docs/design.md) is a self-contained distillation —
 the lifecycle, firing rule, forward cascade, the two reject kinds, §6 liveness,
 and the concurrency model — cross-referenced from the source as `§N`.

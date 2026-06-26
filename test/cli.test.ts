@@ -17,10 +17,10 @@ const EXAMPLES = join(import.meta.dirname, '..', 'examples', 'workflows');
 
 /** A CLI bound to a fresh temp db + a cwd; returns captured streams + exit code. */
 function makeCli(opts: { defs?: string; setDbEnv?: boolean } = {}) {
-  const home = mkdtempSync(join(tmpdir(), 'liveloop-cli-'));
+  const home = mkdtempSync(join(tmpdir(), 'owenloop-cli-'));
   const db = join(home, 'state.db');
-  const env: Record<string, string | undefined> = { LIVELOOP_DEFS: opts.defs ?? EXAMPLES };
-  if (opts.setDbEnv !== false) env.LIVELOOP_DB = db;
+  const env: Record<string, string | undefined> = { OWENLOOP_DEFS: opts.defs ?? EXAMPLES };
+  if (opts.setDbEnv !== false) env.OWENLOOP_DB = db;
   const run = (...argv: string[]) => {
     const out: string[] = [];
     const err: string[] = [];
@@ -44,7 +44,7 @@ test('no command prints usage and exits 0', () => {
   const { run } = makeCli();
   const r = run();
   assert.equal(r.code, 0);
-  assert.match(r.out, /^liveloop — a dataflow workflow engine/);
+  assert.match(r.out, /^owenloop — a dataflow workflow engine/);
 });
 
 test('help / --help / -h all print usage', () => {
@@ -52,7 +52,7 @@ test('help / --help / -h all print usage', () => {
   for (const h of ['help', '--help', '-h']) {
     const r = run(h);
     assert.equal(r.code, 0, h);
-    assert.match(r.out, /Usage: liveloop <command>/, h);
+    assert.match(r.out, /Usage: owenloop <command>/, h);
   }
 });
 
@@ -61,7 +61,7 @@ test('an unknown command exits 1 and echoes usage', () => {
   const r = run('frobnicate');
   assert.equal(r.code, 1);
   assert.match(r.err, /unknown command: frobnicate/);
-  assert.match(r.err, /Usage: liveloop/, 'usage is included to orient the user');
+  assert.match(r.err, /Usage: owenloop/, 'usage is included to orient the user');
 });
 
 // ---- the full lifecycle, in-process -----------------------------------------
@@ -213,9 +213,9 @@ test('list tolerates a workflow whose definition is no longer available (done: n
   const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
 
   // re-open against a defs dir that no longer contains 'delivery' — status can't be derived
-  const noDefs = mkdtempSync(join(tmpdir(), 'liveloop-nodefs-'));
+  const noDefs = mkdtempSync(join(tmpdir(), 'owenloop-nodefs-'));
   const out: string[] = [];
-  const code = main(['list'], { cwd: home, env: { LIVELOOP_DB: db, LIVELOOP_DEFS: noDefs }, out: (s) => out.push(s), err: () => {} });
+  const code = main(['list'], { cwd: home, env: { OWENLOOP_DB: db, OWENLOOP_DEFS: noDefs }, out: (s) => out.push(s), err: () => {} });
   const list = JSON.parse(out.join('\n'));
   assert.equal(code, 0, 'list still succeeds');
   assert.equal(list[0].id, wf, 'the instance is still listed');
@@ -253,9 +253,9 @@ test('status --all isolates an instance whose definition is missing (error field
   const wf = run('create', 'delivery', '--provide', `proposal=${J({ text: 'x' })}`).json().workflow;
 
   // re-open against a defs dir without 'delivery' — status can't be derived
-  const noDefs = mkdtempSync(join(tmpdir(), 'liveloop-nodefs-'));
+  const noDefs = mkdtempSync(join(tmpdir(), 'owenloop-nodefs-'));
   const out: string[] = [];
-  const code = main(['status', '--all'], { cwd: home, env: { LIVELOOP_DB: db, LIVELOOP_DEFS: noDefs }, out: (s) => out.push(s), err: () => {} });
+  const code = main(['status', '--all'], { cwd: home, env: { OWENLOOP_DB: db, OWENLOOP_DEFS: noDefs }, out: (s) => out.push(s), err: () => {} });
   const all = JSON.parse(out.join('\n'));
   assert.equal(code, 0, 'the fleet read still succeeds');
   assert.equal(all.length, 1);
@@ -322,16 +322,16 @@ test('status --all reports a finished instance as done with no debts', () => {
 
 // ---- store/path defaulting --------------------------------------------------
 
-test('with no --db or LIVELOOP_DB, the store defaults under cwd/.liveloop', () => {
+test('with no --db or OWENLOOP_DB, the store defaults under cwd/.owenloop', () => {
   const { run, home } = makeCli({ setDbEnv: false });
   const r = run('list'); // any command that opens the store
   assert.equal(r.code, 0);
-  assert.ok(existsSync(join(home, '.liveloop', 'state.db')), 'created the default db path');
+  assert.ok(existsSync(join(home, '.owenloop', 'state.db')), 'created the default db path');
 });
 
-// ---- liveloop lint ------------------------------------------------------------
+// ---- owenloop lint ------------------------------------------------------------
 
-test('liveloop lint exits 0 for clean definitions and prints JSON', () => {
+test('owenloop lint exits 0 for clean definitions and prints JSON', () => {
   const { run } = makeCli();
   const r = run('lint');
   assert.equal(r.code, 0);
@@ -341,7 +341,7 @@ test('liveloop lint exits 0 for clean definitions and prints JSON', () => {
   assert.ok(results.every((x: any) => x.errors.length === 0), 'example defs should have no errors');
 });
 
-test('liveloop lint <name> exits 0 and returns a single object', () => {
+test('owenloop lint <name> exits 0 and returns a single object', () => {
   const { run } = makeCli();
   const r = run('lint', 'delivery');
   assert.equal(r.code, 0);
@@ -350,8 +350,8 @@ test('liveloop lint <name> exits 0 and returns a single object', () => {
   assert.deepEqual(result.errors, []);
 });
 
-test('liveloop lint exits non-zero when a definition has wiring errors', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'liveloop-lint-bad-'));
+test('owenloop lint exits non-zero when a definition has wiring errors', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'owenloop-lint-bad-'));
   writeFileSync(
     join(dir, 'broken.yaml'),
     'name: broken\ninputs:\n  - name: seed\nloops:\n  - name: a\n    consumes: [seed]\n    produces: [mid]\n  - name: b\n    consumes: [ghost]\n    produces: [out]\n    terminal: true\n',
@@ -365,8 +365,8 @@ test('liveloop lint exits non-zero when a definition has wiring errors', () => {
   assert.ok(broken.errors.length > 0, 'broken def has errors');
 });
 
-test('liveloop lint exits 0 when a def has warnings but no errors', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'liveloop-lint-warn-'));
+test('owenloop lint exits 0 when a def has warnings but no errors', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'owenloop-lint-warn-'));
   writeFileSync(
     join(dir, 'warned.yaml'),
     'name: warned\ninputs:\n  - name: seed\nloops:\n  - name: a\n    consumes: [seed]\n    produces: [useful, orphan]\n  - name: b\n    consumes: [useful]\n    produces: [done]\n    terminal: true\n',
