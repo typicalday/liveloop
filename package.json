@@ -1,0 +1,62 @@
+{
+  "name": "owenloop",
+  "version": "0.1.0",
+  "description": "Owen — a debt-driven dataflow engine. Steps fire on what they owe, not a status; the graph stays honest with its live inputs and knows when to stop. The disciplined engine for your Ralph loop. Direct node:sqlite (WAL + commit-fingerprint CAS).",
+  "license": "AGPL-3.0-only",
+  "author": "typicalday",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/typicalday/owenloop.git"
+  },
+  "homepage": "https://github.com/typicalday/owenloop#readme",
+  "bugs": {
+    "url": "https://github.com/typicalday/owenloop/issues"
+  },
+  "keywords": [
+    "workflow",
+    "dataflow",
+    "engine",
+    "sqlite",
+    "orchestration",
+    "dag",
+    "state-machine"
+  ],
+  "bin": {
+    "owenloop": "bin/owenloop.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "bin",
+    "examples",
+    "docs"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "owenloop": "node bin/owenloop.mjs",
+    "test": "node --test --test-reporter=spec test/*.test.ts",
+    "test:quiet": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test:quiet",
+    "prepublishOnly": "npm run check"
+  },
+  "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
